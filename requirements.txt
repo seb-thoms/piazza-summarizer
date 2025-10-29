@@ -1,5 +1,5 @@
 # Piazza API access
-piazza-api==0.13.0
+piazza-api
 
 # Data handling
 jsonlines==4.0.0
