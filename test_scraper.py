@@ -6,11 +6,7 @@ Run this to test the scraper with your credentials.
 
 import os
 import sys
-from pathlib import Path
 from dotenv import load_dotenv
-
-# Add src to path
-#sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from src.piazza_summarizer.scrapers.piazza_scraper import PiazzaScraper
 from src.piazza_summarizer.utils.logger import setup_logger
@@ -54,8 +50,8 @@ def main():
         scraper.connect_to_course(network_id)
 
         # Fetch a limited number of posts for testing
-        logger.info("Fetching first 10 posts for testing...")
-        posts = scraper.get_all_posts(limit=30)
+        logger.info("Fetching first 100 posts for testing...")
+        posts = scraper.get_all_posts(limit=100, sleep=3)
 
         # Display summary
         logger.info(f"\n{'=' * 60}")
