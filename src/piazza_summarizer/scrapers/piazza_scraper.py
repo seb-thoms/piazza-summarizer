@@ -74,6 +74,38 @@ class PiazzaScraper:
             logger.error(f"Unexpected error during login: {e}")
             raise
 
+    def get_user_courses(self) -> List[Dict[str, Any]]:
+        """
+        Get list of courses the authenticated user has access to.
+
+        Returns:
+            List of course dictionaries with name and network ID
+
+        Raises:
+            RuntimeError: If not authenticated
+        """
+        if not self._authenticated:
+            raise RuntimeError("Must authenticate before getting courses")
+
+        try:
+            logger.info("Fetching user courses")
+            user_profile = self.piazza.get_user_profile()
+            courses = user_profile.get('all_classes', [])
+
+            logger.info(f"Found {len(courses)} courses")
+            return [
+                {
+                    "name": course.get('name', 'Unknown'),
+                    "network_id": course.get('nid'),
+                    "term": course.get('term', 'Unknown'),
+                    "status": course.get('status', 'Unknown')
+                }
+                for course in courses
+            ]
+        except Exception as e:
+            logger.error(f"Failed to get user courses: {e}")
+            raise
+
     def connect_to_course(self, network_id: str) -> None:
         """
         Connect to a specific Piazza course network.
@@ -188,11 +220,11 @@ class PiazzaScraper:
         history = raw_post.get('history', [])
         current_content = history[-1] if history else {}
 
-        # Extract answers
+        # Extract answers and followups
         children = raw_post.get('children', [])
         student_answer = self._extract_answer(children, 's_answer')
         instructor_answer = self._extract_answer(children, 'i_answer')
-        followups = self._extract_followups(children)
+        followups = self._extract_followups_with_replies(children)
 
         structured = {
             "post_id": raw_post.get('id') or raw_post.get('nr'),
@@ -215,40 +247,118 @@ class PiazzaScraper:
         return structured
 
     def _extract_answer(
-            self,
-            children: List[Dict[str, Any]],
-            answer_type: str
+        self,
+        children: List[Dict[str, Any]],
+        answer_type: str
     ) -> Optional[Dict[str, Any]]:
-        """Extract student or instructor answer from children."""
+        """
+        Extract student or instructor answer from children.
+
+        Args:
+            children: List of child elements
+            answer_type: Either 's_answer' or 'i_answer'
+
+        Returns:
+            Answer dictionary with content and metadata, or None
+        """
         for child in children:
             if child.get('type') == answer_type:
                 history = child.get('history', [])
                 current = history[-1] if history else {}
-                return {
+
+                answer = {
+                    "id": child.get('id'),
                     "content": current.get('content', ''),
                     "created": child.get('created'),
                     "updated": child.get('updated'),
                 }
+
+                # Add endorsement info if available
+                if child.get('tag_endorse_arr'):
+                    answer["endorsed_by"] = child.get('tag_endorse_arr', [])
+
+                return answer
+
         return None
 
-    def _extract_followups(self, children: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Extract followup discussions from children."""
+    def _extract_followups_with_replies(self, children: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Extract followup discussions with nested replies from children.
+
+        Args:
+            children: List of child elements from post
+
+        Returns:
+            List of followup dictionaries with nested replies
+        """
         followups = []
+
         for child in children:
             if child.get('type') == 'followup':
-                # history = child.get('history', [])
-                # current = history[-1] if history else {}
-                followups.append({
+                # Extract followup content
+                followup_data = {
+                    "id": child.get('id'),
                     "content": child.get('subject', ''),
                     "created": child.get('created'),
-                })
+                    "updated": child.get('updated'),
+                    "author_type": self._determine_author_type(child),
+                    "replies": []
+                }
+
+                # Extract nested replies (feedback, etc.)
+                followup_children = child.get('children', [])
+                for reply in followup_children:
+                    reply_type = reply.get('type')
+                    if reply_type in ['feedback', 'followup']:  # Can have nested followups too
+                        reply_data = {
+                            "id": reply.get('id'),
+                            "type": reply_type,
+                            "content": reply.get('subject', ''),
+                            "created": reply.get('created'),
+                            "updated": reply.get('updated'),
+                            "author_type": self._determine_author_type(reply)
+                        }
+                        followup_data["replies"].append(reply_data)
+
+                followups.append(followup_data)
+
         return followups
 
+    def _determine_author_type(self, item: Dict[str, Any]) -> str:
+        """
+        Determine if author is student or instructor based on available data.
+
+        Args:
+            item: Post/followup/reply item
+
+        Returns:
+            'instructor', 'student', or 'unknown'
+        """
+        # Check if there's tag_endorse (instructors can endorse)
+        if item.get('tag_endorse') or item.get('tag_endorse_arr'):
+            return 'instructor'
+
+        # Check uid patterns or other indicators
+        # Note: This is a heuristic and may need refinement
+        uid = item.get('uid', '')
+
+        # Instructors often have different uid patterns
+        # This may need adjustment based on your course
+        if uid.startswith('lm'):  # Example pattern observed
+            return 'instructor'
+
+        # Check anon field
+        anon = item.get('anon', 'no')
+        if anon == 'stud':
+            return 'student'
+
+        return 'student'  # Default assumption
+
     def save_to_jsonl(
-            self,
-            posts: List[Dict[str, Any]],
-            filepath: str,
-            append: bool = False
+        self,
+        posts: List[Dict[str, Any]],
+        filepath: str,
+        append: bool = False
     ) -> None:
         """
         Save posts to a JSONL file.
@@ -263,10 +373,10 @@ class PiazzaScraper:
         logger.info("Save complete")
 
     def scrape_and_save(
-            self,
-            network_id: str,
-            output_file: str,
-            limit: Optional[int] = None
+        self,
+        network_id: str,
+        output_file: str,
+        limit: Optional[int] = None
     ) -> int:
         """
         Complete workflow: connect, scrape, and save.
