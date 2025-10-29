@@ -38,6 +38,7 @@ class PiazzaScraper:
         self.piazza = Piazza()
         self.network = None
         self._authenticated = False
+        self.instructor_uids = set()  # Store instructor/TA UIDs
 
         logger.info("PiazzaScraper initialized")
 
@@ -106,9 +107,42 @@ class PiazzaScraper:
             logger.error(f"Failed to get user courses: {e}")
             raise
 
+    def get_course_instructors(self) -> List[Dict[str, Any]]:
+        """
+        Get list of instructors and TAs for the connected course.
+
+        Returns:
+            List of instructor dictionaries with name, email, and role
+
+        Raises:
+            RuntimeError: If not connected to a course
+        """
+        if not self.network:
+            raise RuntimeError("Must connect to a course first")
+
+        try:
+            logger.info("Fetching course instructors")
+            all_users = self.network.get_all_users()
+
+            instructors = [
+                {
+                    "uid": user.get('id') ,
+                    "role": user.get('role', 'unknown')
+                }
+                for user in all_users
+                if user.get('role') in ['instructor', 'ta', 'professor']
+            ]
+
+            logger.info(f"Found {len(instructors)} instructors/TAs")
+            return instructors
+
+        except Exception as e:
+            logger.error(f"Failed to get instructors: {e}")
+            raise
+
     def connect_to_course(self, network_id: str) -> None:
         """
-        Connect to a specific Piazza course network.
+        Connect to a specific Piazza course network and fetch instructor UIDs.
 
         Args:
             network_id: The course network ID (found in Piazza URL)
@@ -123,9 +157,43 @@ class PiazzaScraper:
             logger.info(f"Connecting to course network: {network_id}")
             self.network = self.piazza.network(network_id)
             logger.info("Successfully connected to course")
+
+            # Fetch and cache instructor UIDs
+            self._fetch_instructor_uids()
+
         except Exception as e:
             logger.error(f"Failed to connect to course {network_id}: {e}")
             raise
+
+    def _fetch_instructor_uids(self) -> None:
+        """
+        Fetch all users and extract instructor/TA UIDs.
+        Stores them in self.instructor_uids for later lookup.
+        """
+        try:
+            logger.info("Fetching course users to identify instructors...")
+            all_users = self.network.get_all_users()
+
+            # Filter instructors and TAs
+            instructors = [
+                user for user in all_users
+                if user.get('role') in ['instructor', 'ta']
+            ]
+
+            # Extract UIDs
+            self.instructor_uids = {
+                user.get('id') or user.get('uid') or user.get('user_id')
+                for user in instructors
+                if user.get('id') or user.get('uid') or user.get('user_id')
+            }
+
+            logger.info(f"Identified {len(self.instructor_uids)} instructors/TAs")
+            logger.debug(f"Instructor UIDs: {self.instructor_uids}")
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch instructor UIDs: {e}")
+            logger.warning("Author type detection may be inaccurate")
+            self.instructor_uids = set()  # Empty set as fallback
 
     def get_all_posts(
             self,
@@ -326,33 +394,25 @@ class PiazzaScraper:
 
     def _determine_author_type(self, item: Dict[str, Any]) -> str:
         """
-        Determine if author is student or instructor based on available data.
+        Determine if author is student or instructor based on UID lookup.
 
         Args:
             item: Post/followup/reply item
 
         Returns:
-            'instructor', 'student', or 'unknown'
+            'instructor' if UID is in instructor list, 'student' otherwise
         """
-        # Check if there's tag_endorse (instructors can endorse)
-        if item.get('tag_endorse') or item.get('tag_endorse_arr'):
-            return 'instructor'
-
-        # Check uid patterns or other indicators
-        # Note: This is a heuristic and may need refinement
         uid = item.get('uid', '')
 
-        # Instructors often have different uid patterns
-        # This may need adjustment based on your course
-        if uid.startswith('lm'):  # Example pattern observed
-            return 'instructor'
-
-        # Check anon field
-        anon = item.get('anon', 'no')
-        if anon == 'stud':
+        if not uid:
+            logger.debug("No UID found in item, defaulting to 'student'")
             return 'student'
 
-        return 'student'  # Default assumption
+        # Check against instructor UIDs
+        if uid in self.instructor_uids:
+            return 'instructor'
+        else:
+            return 'student'
 
     def save_to_jsonl(
         self,
