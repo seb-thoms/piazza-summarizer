@@ -198,14 +198,16 @@ class PiazzaScraper:
     def get_all_posts(
             self,
             limit: Optional[int] = None,
-            sleep: int = 1
+            sleep: int = 1,
+            public_only: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Retrieve all posts from the connected course.
 
         Args:
             limit: Maximum number of posts to retrieve (None for all)
-            sleep: To get around fetching all posts without getting banned by Piazza
+            sleep: Sleep time between fetches to avoid rate limiting
+            public_only: If True, only fetch public posts (skip private posts)
 
         Returns:
             List of post dictionaries with structured data
@@ -217,31 +219,37 @@ class PiazzaScraper:
             raise RuntimeError("Must connect to a course before fetching posts")
 
         try:
-            logger.info(f"Fetching posts (limit={limit}, sleep={sleep})")
+            logger.info(f"Fetching posts (limit={limit}, sleep={sleep}, public_only={public_only})")
 
             posts = []
-            for post_meta in self.network.iter_all_posts(limit=limit, sleep=sleep):
+            skipped_private = 0
+
+            for full_post in self.network.iter_all_posts(limit=limit, sleep=sleep):
                 try:
-                    # Get full post details
-                    post_id = post_meta.get('id') or post_meta.get('nr')
+                    post_id = full_post.get('id') or full_post.get('nr')
 
                     if not post_id:
-                        logger.warning(f"Skipping post with no ID: {post_meta}")
+                        logger.warning(f"Skipping post with no ID: {full_post}")
                         continue
 
-                    logger.debug(f"Fetching details for post {post_id}")
-                    full_post = self.network.get_post(post_id)
+                    # Check if post is private and should be skipped
+                    if public_only and self._is_post_private(full_post):
+                        logger.info(f"Skipping private post {post_id}")
+                        skipped_private += 1
+                        continue
+
+                    logger.debug(f"Processing post {post_id}")
 
                     # Structure the post data
                     structured_post = self._structure_post(full_post)
                     posts.append(structured_post)
 
-                    # Being extra cautious with Piazza
-                    time.sleep(0.1)
-
                 except Exception as e:
-                    logger.error(f"Failed to fetch post {post_id}: {e}")
+                    logger.error(f"Failed to process post {post_id}: {e}")
                     continue
+
+            if public_only and skipped_private > 0:
+                logger.info(f"Skipped {skipped_private} private posts")
 
             logger.info(f"Successfully retrieved {len(posts)} posts")
             return posts
@@ -274,6 +282,36 @@ class PiazzaScraper:
             logger.error(f"Failed to fetch post {post_id}: {e}")
             raise
 
+    def _is_post_private(self, post: Dict[str, Any]) -> bool:
+        """
+        Check if a post is private.
+
+        Args:
+            post: Full post dictionary from Piazza API
+
+        Returns:
+            True if post is private, False if public or unknown
+        """
+        change_log = post.get('change_log', [])
+
+        if not change_log:
+            # No change_log means we can't determine visibility
+            # Default to treating as public to avoid over-filtering
+            logger.debug(f"Post {post.get('id')} has no change_log, assuming public")
+            return False
+
+        # Check visibility in first change_log entry
+        visibility = change_log[0].get('v', 'all')
+
+        # 'private' means only visible to instructors/specific users
+        # 'all' means visible to entire class (public)
+        is_private = visibility == 'private'
+
+        if is_private:
+            logger.debug(f"Post {post.get('id')} has visibility='{visibility}' (private)")
+
+        return is_private
+
     def _structure_post(self, raw_post: Dict[str, Any]) -> Dict[str, Any]:
         """
         Convert raw Piazza API response to structured format.
@@ -294,10 +332,13 @@ class PiazzaScraper:
         instructor_answer = self._extract_answer(children, 'i_answer')
         followups = self._extract_followups_with_replies(children)
 
+        is_public = not self._is_post_private(raw_post)
+
         structured = {
             "post_id": raw_post.get('id') or raw_post.get('nr'),
             "post_number": raw_post.get('nr'),
             "type": raw_post.get('type'),
+            "is_public": is_public,
             "created": raw_post.get('created'),
             "updated": raw_post.get('updated'),
             "subject": current_content.get('subject', ''),

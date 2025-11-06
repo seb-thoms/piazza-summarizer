@@ -50,8 +50,8 @@ def main():
         scraper.connect_to_course(network_id)
 
         # Fetch a limited number of posts for testing
-        logger.info("Fetching first 100 posts for testing...")
-        posts = scraper.get_all_posts(limit=100, sleep=3)
+        logger.info("Fetching first 50 posts for testing...")
+        posts = scraper.get_all_posts(limit=50, sleep=3)
 
         # Display summary
         logger.info(f"\n{'=' * 60}")
