@@ -6,15 +6,20 @@ Uses the unofficial piazza-api library.
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from datetime import UTC
-import time
 
 from piazza_api import Piazza
 from piazza_api.exceptions import RequestError, AuthenticationError
 
 from piazza_summarizer.utils.logger import get_logger
 from piazza_summarizer.utils.file_handler import JSONLHandler
+from piazza_summarizer.utils.logger import setup_logger
 
-logger = get_logger(__name__)
+
+setup_logger(
+    name="piazza_summarizer",
+    level="DEBUG",
+    log_file="logs/piazza_scraper.log"
+)
 
 
 class PiazzaScraper:
@@ -39,8 +44,10 @@ class PiazzaScraper:
         self.network = None
         self._authenticated = False
         self.instructor_uids = set()  # Store instructor/TA UIDs
+        
+        self.logger = get_logger(__name__)
 
-        logger.info("PiazzaScraper initialized")
+        self.logger.info("PiazzaScraper initialized")
 
     def login(self, email: Optional[str] = None, password: Optional[str] = None) -> bool:
         """
@@ -63,16 +70,16 @@ class PiazzaScraper:
             raise ValueError("Email and password are required for authentication")
 
         try:
-            logger.info(f"Attempting to authenticate as {email}")
+            self.logger.info(f"Attempting to authenticate as {email}")
             self.piazza.user_login(email=email, password=password)
             self._authenticated = True
-            logger.info("Authentication successful")
+            self.logger.info("Authentication successful")
             return True
         except AuthenticationError as e:
-            logger.error(f"Authentication failed: {e}")
+            self.logger.error(f"Authentication failed: {e}")
             raise
         except Exception as e:
-            logger.error(f"Unexpected error during login: {e}")
+            self.logger.error(f"Unexpected error during login: {e}")
             raise
 
     def get_user_courses(self) -> List[Dict[str, Any]]:
@@ -89,11 +96,11 @@ class PiazzaScraper:
             raise RuntimeError("Must authenticate before getting courses")
 
         try:
-            logger.info("Fetching user courses")
+            self.logger.info("Fetching user courses")
             user_profile = self.piazza.get_user_profile()
             courses = user_profile.get('all_classes', [])
 
-            logger.info(f"Found {len(courses)} courses")
+            self.logger.info(f"Found {len(courses)} courses")
             return [
                 {
                     "name": course.get('name', 'Unknown'),
@@ -104,7 +111,7 @@ class PiazzaScraper:
                 for course in courses
             ]
         except Exception as e:
-            logger.error(f"Failed to get user courses: {e}")
+            self.logger.error(f"Failed to get user courses: {e}")
             raise
 
     def get_course_instructors(self) -> List[Dict[str, Any]]:
@@ -121,7 +128,7 @@ class PiazzaScraper:
             raise RuntimeError("Must connect to a course first")
 
         try:
-            logger.info("Fetching course instructors")
+            self.logger.info("Fetching course instructors")
             all_users = self.network.get_all_users()
 
             instructors = [
@@ -133,11 +140,11 @@ class PiazzaScraper:
                 if user.get('role') in ['instructor', 'ta', 'professor']
             ]
 
-            logger.info(f"Found {len(instructors)} instructors/TAs")
+            self.logger.info(f"Found {len(instructors)} instructors/TAs")
             return instructors
 
         except Exception as e:
-            logger.error(f"Failed to get instructors: {e}")
+            self.logger.error(f"Failed to get instructors: {e}")
             raise
 
     def connect_to_course(self, network_id: str) -> None:
@@ -154,15 +161,15 @@ class PiazzaScraper:
             raise RuntimeError("Must authenticate before connecting to course")
 
         try:
-            logger.info(f"Connecting to course network: {network_id}")
+            self.logger.info(f"Connecting to course network: {network_id}")
             self.network = self.piazza.network(network_id)
-            logger.info("Successfully connected to course")
+            self.logger.info("Successfully connected to course")
 
             # Fetch and cache instructor UIDs
             self._fetch_instructor_uids()
 
         except Exception as e:
-            logger.error(f"Failed to connect to course {network_id}: {e}")
+            self.logger.error(f"Failed to connect to course {network_id}: {e}")
             raise
 
     def _fetch_instructor_uids(self) -> None:
@@ -171,13 +178,13 @@ class PiazzaScraper:
         Stores them in self.instructor_uids for later lookup.
         """
         try:
-            logger.info("Fetching course users to identify instructors...")
+            self.logger.info("Fetching course users to identify instructors...")
             all_users = self.network.get_all_users()
 
             # Filter instructors and TAs
             instructors = [
                 user for user in all_users
-                if user.get('role') in ['instructor', 'ta']
+                if user.get('role') in ['instructor', 'ta', 'professor']
             ]
 
             # Extract UIDs
@@ -187,12 +194,12 @@ class PiazzaScraper:
                 if user.get('id') or user.get('uid') or user.get('user_id')
             }
 
-            logger.info(f"Identified {len(self.instructor_uids)} instructors/TAs")
-            logger.debug(f"Instructor UIDs: {self.instructor_uids}")
+            self.logger.info(f"Identified {len(self.instructor_uids)} instructors/TAs")
+            self.logger.debug(f"Instructor UIDs: {self.instructor_uids}")
 
         except Exception as e:
-            logger.warning(f"Failed to fetch instructor UIDs: {e}")
-            logger.warning("Author type detection may be inaccurate")
+            self.logger.warning(f"Failed to fetch instructor UIDs: {e}")
+            self.logger.warning("Author type detection may be inaccurate")
             self.instructor_uids = set()  # Empty set as fallback
 
     def get_all_posts(
@@ -219,7 +226,7 @@ class PiazzaScraper:
             raise RuntimeError("Must connect to a course before fetching posts")
 
         try:
-            logger.info(f"Fetching posts (limit={limit}, sleep={sleep}, public_only={public_only})")
+            self.logger.info(f"Fetching posts (limit={limit}, sleep={sleep}, public_only={public_only})")
 
             posts = []
             skipped_private = 0
@@ -229,36 +236,36 @@ class PiazzaScraper:
                     post_id = full_post.get('id') or full_post.get('nr')
 
                     if not post_id:
-                        logger.warning(f"Skipping post with no ID: {full_post}")
+                        self.logger.warning(f"Skipping post with no ID: {full_post}")
                         continue
 
                     # Check if post is private and should be skipped
                     if public_only and self._is_post_private(full_post):
-                        logger.info(f"Skipping private post {post_id}")
+                        self.logger.info(f"Skipping private post {post_id}")
                         skipped_private += 1
                         continue
 
-                    logger.debug(f"Processing post {post_id}")
+                    self.logger.debug(f"Processing post {post_id}")
 
                     # Structure the post data
                     structured_post = self._structure_post(full_post)
                     posts.append(structured_post)
 
                 except Exception as e:
-                    logger.error(f"Failed to process post {post_id}: {e}")
+                    self.logger.error(f"Failed to process post {post_id}: {e}")
                     continue
 
             if public_only and skipped_private > 0:
-                logger.info(f"Skipped {skipped_private} private posts")
+                self.logger.info(f"Skipped {skipped_private} private posts")
 
-            logger.info(f"Successfully retrieved {len(posts)} posts")
+            self.logger.info(f"Successfully retrieved {len(posts)} posts")
             return posts
 
         except RequestError as e:
-            logger.error(f"API request failed: {e}")
+            self.logger.error(f"API request failed: {e}")
             raise
         except Exception as e:
-            logger.error(f"Unexpected error while fetching posts: {e}")
+            self.logger.error(f"Unexpected error while fetching posts: {e}")
             raise
 
     def get_post_by_id(self, post_id: str) -> Dict[str, Any]:
@@ -275,11 +282,11 @@ class PiazzaScraper:
             raise RuntimeError("Must connect to a course before fetching posts")
 
         try:
-            logger.info(f"Fetching post {post_id}")
+            self.logger.info(f"Fetching post {post_id}")
             full_post = self.network.get_post(post_id)
             return self._structure_post(full_post)
         except Exception as e:
-            logger.error(f"Failed to fetch post {post_id}: {e}")
+            self.logger.error(f"Failed to fetch post {post_id}: {e}")
             raise
 
     def _is_post_private(self, post: Dict[str, Any]) -> bool:
@@ -297,7 +304,7 @@ class PiazzaScraper:
         if not change_log:
             # No change_log means we can't determine visibility
             # Default to treating as public to avoid over-filtering
-            logger.debug(f"Post {post.get('id')} has no change_log, assuming public")
+            self.logger.debug(f"Post {post.get('id')} has no change_log, assuming public")
             return False
 
         # Check visibility in first change_log entry
@@ -308,7 +315,7 @@ class PiazzaScraper:
         is_private = visibility == 'private'
 
         if is_private:
-            logger.debug(f"Post {post.get('id')} has visibility='{visibility}' (private)")
+            self.logger.debug(f"Post {post.get('id')} has visibility='{visibility}' (private)")
 
         return is_private
 
@@ -446,7 +453,7 @@ class PiazzaScraper:
         uid = item.get('uid', '')
 
         if not uid:
-            logger.debug("No UID found in item, defaulting to 'student'")
+            self.logger.debug("No UID found in item, defaulting to 'student'")
             return 'student'
 
         # Check against instructor UIDs
@@ -469,9 +476,9 @@ class PiazzaScraper:
             filepath: Output file path
             append: If True, append to existing file
         """
-        logger.info(f"Saving {len(posts)} posts to {filepath}")
+        self.logger.info(f"Saving {len(posts)} posts to {filepath}")
         JSONLHandler.write(posts, filepath, append=append)
-        logger.info("Save complete")
+        self.logger.info("Save complete")
 
     def scrape_and_save(
         self,
