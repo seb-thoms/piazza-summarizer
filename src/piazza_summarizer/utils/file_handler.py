@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Generator
 from datetime import datetime
 
-from src.piazza_summarizer.utils.logger import get_logger
+from piazza_summarizer.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

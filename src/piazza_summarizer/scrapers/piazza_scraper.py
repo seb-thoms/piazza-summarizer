@@ -11,8 +11,8 @@ import time
 from piazza_api import Piazza
 from piazza_api.exceptions import RequestError, AuthenticationError
 
-from src.piazza_summarizer.utils.logger import get_logger
-from src.piazza_summarizer.utils.file_handler import JSONLHandler
+from piazza_summarizer.utils.logger import get_logger
+from piazza_summarizer.utils.file_handler import JSONLHandler
 
 logger = get_logger(__name__)
 
