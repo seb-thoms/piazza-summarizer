@@ -67,7 +67,7 @@ def display_existing_courses(courses):
                     st.session_state['selected_course'] = course_file
                     st.session_state['course_metadata'] = metadata
                     # Navigate to analysis page
-                    st.switch_page("pages/2_🔍_Analyze.py")
+                    st.switch_page("pages/analyze.py")
 
             with col3:
                 if st.button("🔄 Re-scrape", key=f"rescrape_{course_file}"):
@@ -75,7 +75,7 @@ def display_existing_courses(courses):
                     st.session_state['rescrape_course'] = course_file
                     st.session_state['course_metadata'] = metadata
                     # Navigate to scrape page
-                    st.switch_page("pages/1_📊_Scrape.py")
+                    st.switch_page("pages/scrape.py")
 
             st.markdown("---")
 
@@ -105,7 +105,7 @@ def display_new_course_option():
             if 'rescrape_course' in st.session_state:
                 del st.session_state['rescrape_course']
             # Navigate to scrape page
-            st.switch_page("pages/1_📊_Scrape.py")
+            st.switch_page("pages/scrape.py")
 
 
 def display_sidebar():
@@ -128,17 +128,9 @@ def display_sidebar():
             "- Credentials are never stored\n"
             "- Only public posts are analyzed\n"
             "- Data stays on your local machine\n"
-            "- Ensure IRB approval before use"
         )
 
         st.markdown("---")
-
-        st.markdown("### 🏫 CATLR")
-        st.markdown(
-            "Developed at Northeastern University's\n"
-            "Center for Advancing Teaching and Learning through Research"
-        )
-
 
 if __name__ == "__main__":
     main()
