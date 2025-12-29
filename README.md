@@ -114,7 +114,7 @@ python test_pii_removal.py
 
 ---
 
-## 🎯 Quick Start
+## Quick Start
 
 ### Web Interface
 
@@ -274,7 +274,7 @@ All names are replaced with `[NAME]`:
 - Context-aware (doesn't replace "Will you" as a name)
 
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Adding Features
 
@@ -323,7 +323,7 @@ tail -f logs/piazza_scraper.log
 - **Piazza-Scraper** - For providing the module to scrape Piazza
 - **Anthropic** - For Claude AI capabilities
 
-## ⚠️ Disclaimer
+## Disclaimer
 
 This tool is for educational and research purposes. Users are responsible for:
 - Obtaining necessary IRB approvals
