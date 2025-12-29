@@ -13,11 +13,12 @@ from piazza_api.exceptions import RequestError, AuthenticationError
 from piazza_summarizer.utils.logger import get_logger
 from piazza_summarizer.utils.file_handler import JSONLHandler
 from piazza_summarizer.utils.logger import setup_logger
+from ..processors.pii_remover import PIIRemover
 
 
 setup_logger(
     name="piazza_summarizer",
-    level="DEBUG",
+    level="INFO",
     log_file="logs/piazza_scraper.log"
 )
 
@@ -44,7 +45,8 @@ class PiazzaScraper:
         self.network = None
         self._authenticated = False
         self.instructor_uids = set()  # Store instructor/TA UIDs
-        
+        self.all_users = []  # Store all users for PII removal
+
         self.logger = get_logger(__name__)
 
         self.logger.info("PiazzaScraper initialized")
@@ -133,7 +135,9 @@ class PiazzaScraper:
 
             instructors = [
                 {
-                    "uid": user.get('id') ,
+                    "uid": user.get('id') or user.get('uid'),
+                    "name": user.get('name', 'Unknown'),
+                    "email": user.get('email', ''),
                     "role": user.get('role', 'unknown')
                 }
                 for user in all_users
@@ -176,10 +180,14 @@ class PiazzaScraper:
         """
         Fetch all users and extract instructor/TA UIDs.
         Stores them in self.instructor_uids for later lookup.
+        Also stores all users for PII removal.
         """
         try:
             self.logger.info("Fetching course users to identify instructors...")
             all_users = self.network.get_all_users()
+
+            # Store for PII removal
+            self.all_users = all_users
 
             # Filter instructors and TAs
             instructors = [
@@ -195,6 +203,7 @@ class PiazzaScraper:
             }
 
             self.logger.info(f"Identified {len(self.instructor_uids)} instructors/TAs")
+            self.logger.info(f"Loaded {len(all_users)} total users for PII removal")
             self.logger.debug(f"Instructor UIDs: {self.instructor_uids}")
 
         except Exception as e:
@@ -206,7 +215,8 @@ class PiazzaScraper:
             self,
             limit: Optional[int] = None,
             sleep: int = 1,
-            public_only: bool = False
+            public_only: bool = False,
+            clean_pii: bool = True
     ) -> List[Dict[str, Any]]:
         """
         Retrieve all posts from the connected course.
@@ -215,6 +225,7 @@ class PiazzaScraper:
             limit: Maximum number of posts to retrieve (None for all)
             sleep: Sleep time between fetches to avoid rate limiting
             public_only: If True, only fetch public posts (skip private posts)
+            clean_pii: If True, remove names from post content (default: True)
 
         Returns:
             List of post dictionaries with structured data
@@ -226,37 +237,42 @@ class PiazzaScraper:
             raise RuntimeError("Must connect to a course before fetching posts")
 
         try:
-            self.logger.info(f"Fetching posts (limit={limit}, sleep={sleep}, public_only={public_only})")
+            self.logger.info(
+                f"Fetching posts (limit={limit}, sleep={sleep}, public_only={public_only}, clean_pii={clean_pii})")
 
             posts = []
             skipped_private = 0
 
             for full_post in self.network.iter_all_posts(limit=limit, sleep=sleep):
                 try:
-                    post_id = full_post.get('id') or full_post.get('nr')
+                    post_number = full_post.get('nr')
 
-                    if not post_id:
-                        self.logger.warning(f"Skipping post with no ID: {full_post}")
+                    if not post_number:
+                        self.logger.warning(f"Skipping post with no number: {post_number}")
                         continue
 
                     # Check if post is private and should be skipped
                     if public_only and self._is_post_private(full_post):
-                        self.logger.info(f"Skipping private post {post_id}")
+                        self.logger.info(f"Skipping private post {post_number}")
                         skipped_private += 1
                         continue
 
-                    self.logger.debug(f"Processing post {post_id}")
+                    self.logger.info(f"Processing post {post_number}")
 
                     # Structure the post data
                     structured_post = self._structure_post(full_post)
                     posts.append(structured_post)
 
                 except Exception as e:
-                    self.logger.error(f"Failed to process post {post_id}: {e}")
+                    self.logger.error(f"Failed to process post {post_number}: {e}")
                     continue
 
             if public_only and skipped_private > 0:
                 self.logger.info(f"Skipped {skipped_private} private posts")
+
+            # Clean PII if requested (AFTER all posts are collected)
+            if clean_pii:
+                posts = self._clean_pii_from_posts(posts)
 
             self.logger.info(f"Successfully retrieved {len(posts)} posts")
             return posts
@@ -484,7 +500,9 @@ class PiazzaScraper:
         self,
         network_id: str,
         output_file: str,
-        limit: Optional[int] = None
+        limit: Optional[int] = None,
+        public_only: bool = False,
+        clean_pii: bool = True
     ) -> int:
         """
         Complete workflow: connect, scrape, and save.
@@ -493,11 +511,38 @@ class PiazzaScraper:
             network_id: Course network ID
             output_file: Output JSONL file path
             limit: Maximum posts to retrieve
+            public_only: If True, only fetch public posts
+            clean_pii: If True, remove names from posts
 
         Returns:
             Number of posts saved
         """
         self.connect_to_course(network_id)
-        posts = self.get_all_posts(limit=limit)
+        posts = self.get_all_posts(limit=limit, public_only=public_only, clean_pii=clean_pii)
         self.save_to_jsonl(posts, output_file)
         return len(posts)
+
+    def _clean_pii_from_posts(self, posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Remove PII (names) from all posts.
+
+        Args:
+            posts: List of structured posts
+
+        Returns:
+            List of posts with PII removed
+        """
+        if not self.all_users:
+            self.logger.warning("No user roster available, skipping PII removal")
+            return posts
+
+        try:
+            self.logger.info("Removing PII from posts...")
+            pii_remover = PIIRemover(self.all_users)
+            cleaned_posts = pii_remover.clean_posts_batch(posts)
+            self.logger.info("PII removal complete")
+            return cleaned_posts
+        except Exception as e:
+            self.logger.error(f"Failed to clean PII: {e}")
+            self.logger.warning("Returning posts without PII cleaning")
+            return posts
